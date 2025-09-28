@@ -119,26 +119,26 @@ class MissionExecutor:
             self.logger.info(f"Uploading mission {mission_id} with {len(waypoints)} waypoints")
 
             # Validate mission
-            validation_result = MissionValidation.validate_mission_sequence(waypoints)
-            if not validation_result.is_valid:
-                raise ValueError(f"Mission validation failed: {validation_result.errors}")
+            is_valid, errors = MissionValidation.validate_waypoint_sequence(waypoints)
+            if not is_valid:
+                raise ValueError(f"Mission validation failed: {errors}")
 
             # Convert to MAVSDK mission items
             mission_items = []
-            for i, waypoint in enumerate(waypoints):
+            for waypoint in waypoints:
                 mission_item = MissionItem(
-                    latitude_deg=waypoint.latitude,
-                    longitude_deg=waypoint.longitude,
-                    relative_altitude_m=waypoint.altitude,
-                    speed_m_s=waypoint.speed_ms,
+                    latitude_deg=waypoint.coordinate.latitude,
+                    longitude_deg=waypoint.coordinate.longitude,
+                    relative_altitude_m=waypoint.coordinate.altitude or self.config.drone.default_altitude,
+                    speed_m_s=waypoint.speed,
                     is_fly_through=(waypoint.action == "flythrough"),
                     gimbal_pitch_deg=float('nan'),
                     gimbal_yaw_deg=float('nan'),
                     camera_action=MissionItem.CameraAction.NONE,
-                    loiter_time_s=waypoint.loiter_time_s,
+                    loiter_time_s=waypoint.loiter_time,
                     acceptance_radius_m=self.waypoint_radius_m,
                     yaw_deg=float('nan'),
-                    camera_photo_interval_s=float('nan'),
+                    camera_photo_interval_s=waypoint.photo_interval or float('nan'),
                     camera_photo_distance_m=float('nan')
                 )
                 mission_items.append(mission_item)

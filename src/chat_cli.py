@@ -5,7 +5,7 @@ import logging
 import signal
 import sys
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
 
 from rich.console import Console
 from rich.panel import Panel
@@ -19,6 +19,7 @@ from rich import box
 
 from .gpt5_agent import GPT5MissionPlanner, MissionContextBuilder, GeneratedMission
 from .utils.config import get_config
+from .utils.validators import Waypoint
 
 
 class DroneControllerChatCLI:
@@ -35,6 +36,7 @@ class DroneControllerChatCLI:
         # State tracking
         self.running = False
         self.current_mission = None
+        self.current_assignments: List[Tuple[Any, List[Waypoint]]] = []
         self.chat_history = []
 
         # Commands
@@ -129,9 +131,23 @@ class DroneControllerChatCLI:
         """Handle natural language mission requests."""
         self.console.print(f"[blue]🤖 GPT-5 Agent:[/blue] Analyzing mission request: [italic]{description}[/italic]")
 
-        # Show available drones
-        num_drones = len(self.controller.connected_drones)
-        self.console.print(f"[green]📊 Available drones: {num_drones}[/green]")
+        # Show available drones and let operator choose count
+        available_drones = len(self.controller.connected_drones)
+        self.console.print(f"[green]📊 Available drones: {available_drones}[/green]")
+
+        if available_drones == 0:
+            self.console.print("[red]❌ No connected drones. Connect drones before planning a mission.[/red]")
+            return
+
+        default_drone_count = min(available_drones, 3)
+        try:
+            requested = Prompt.ask(
+                "How many drones should participate?",
+                default=str(default_drone_count)
+            )
+            num_drones = max(1, min(available_drones, int(requested)))
+        except ValueError:
+            num_drones = default_drone_count
 
         # Show loading spinner
         with Progress(
@@ -149,7 +165,7 @@ class DroneControllerChatCLI:
                     center_lat=self.config.search.center_lat,
                     center_lon=self.config.search.center_lon,
                     radius_m=self.config.search.radius_m,
-                    num_drones=min(num_drones, 3),
+                    num_drones=num_drones,
                     weather="Clear skies",
                     wind_speed=5.0,
                     time_of_day="Daytime"
@@ -171,6 +187,7 @@ class DroneControllerChatCLI:
         # Display mission details
         self._display_mission(mission)
         self._add_to_history("assistant", f"Generated mission: {mission.strategy_summary}")
+        self.console.print("[dim]Use /execute to fly this mission or describe another plan to regenerate.[/dim]")
 
         # Interactive mission options
         await self._mission_interaction_menu()
@@ -304,6 +321,39 @@ class DroneControllerChatCLI:
 
             self.console.print(waypoint_table)
 
+    async def _prepare_assignments(self) -> List[Tuple[Any, List[Waypoint]]]:
+        """Pair connected drones with mission waypoint lists."""
+        if not self.current_mission:
+            return []
+
+        manager = getattr(self.controller, "drone_manager", None)
+        if not manager:
+            return []
+
+        connected = manager.get_connected_drones()
+        if not connected:
+            return []
+
+        assignments: List[Tuple[Any, List[Waypoint]]] = []
+        for drone, mission_waypoints in zip(connected, self.current_mission.drone_missions):
+            # Only keep non-empty waypoint lists
+            if mission_waypoints:
+                assignments.append((drone, mission_waypoints))
+
+        return assignments
+
+    async def _ensure_drone_ready(self, drone) -> None:
+        """Wait for global position fix and clear previous mission."""
+        try:
+            await drone.wait_for_global_position()
+        except Exception:
+            pass
+
+        try:
+            await drone.drone.mission.clear_mission()
+        except Exception:
+            pass
+
     async def _execute_current_mission(self):
         """Execute the current mission."""
         if not self.current_mission:
@@ -313,23 +363,83 @@ class DroneControllerChatCLI:
         self.console.print("[green]🚀 Starting mission execution...[/green]")
 
         try:
-            # Upload missions to drones
-            for i, waypoints in enumerate(self.current_mission.drone_missions):
-                if i >= len(self.controller.connected_drones):
-                    break
+            assignments = await self._prepare_assignments()
+            if not assignments:
+                self.console.print("[red]❌ No drone assignments available[/red]")
+                return
 
-                drone_id = self.controller.connected_drones[i]
-                executor = self.controller.executors.get(drone_id)
+            self.console.print("[blue]🛠 Preparing drones for mission...[/blue]")
+            for drone, _ in assignments:
+                await self._ensure_drone_ready(drone)
 
-                if executor:
-                    success = await executor.upload_mission(waypoints, f"chat_mission_{drone_id}")
-                    if success:
-                        self.console.print(f"[green]✅ Mission uploaded to {drone_id}[/green]")
-                    else:
-                        self.console.print(f"[red]❌ Failed to upload mission to {drone_id}[/red]")
+            await asyncio.sleep(2)
 
-            self.console.print("[yellow]📡 Missions uploaded. Use /status to monitor progress[/yellow]")
-            self._add_to_history("system", "Mission execution started")
+            for drone, waypoints in assignments:
+                self.console.print(
+                    f"[cyan]Uploading mission to Drone {drone.drone_id} ({len(waypoints)} waypoints)...[/cyan]"
+                )
+                attempt = 0
+                while attempt < 3:
+                    if await drone.upload_mission(waypoints):
+                        self.console.print(f"[green]✅ Mission uploaded to Drone {drone.drone_id}")
+                        break
+                    attempt += 1
+                    self.console.print(
+                        f"[yellow]⏳ Drone {drone.drone_id} busy, retrying ({attempt})...[/yellow]"
+                    )
+                    await asyncio.sleep(2)
+                else:
+                    self.console.print(
+                        f"[red]❌ Failed to upload mission to Drone {drone.drone_id} after retries[/red]"
+                    )
+                    return
+
+            self.console.print("[blue]🛫 Launching drones...")
+            for drone, waypoints in assignments:
+                target_altitude = waypoints[0].coordinate.altitude or self.config.drone.default_altitude
+                if not drone.status.in_air:
+                    self.console.print(
+                        f"[cyan]Drone {drone.drone_id}: takeoff to {target_altitude:.1f}m[/cyan]"
+                    )
+                    if not await drone.arm_and_takeoff(target_altitude):
+                        self.console.print(
+                            f"[red]❌ Takeoff failed for Drone {drone.drone_id}[/red]"
+                        )
+                        return
+
+            await asyncio.sleep(2)
+
+            self.console.print("[blue]▶️ Starting missions...")
+            for drone, _ in assignments:
+                if not await drone.start_mission():
+                    self.console.print(
+                        f"[red]❌ Mission start failed for Drone {drone.drone_id}[/red]"
+                    )
+                    return
+
+            self.console.print("[green]📡 Monitoring mission progress...[/green]")
+
+            async def monitor(drone, waypoint_count):
+                async for progress in drone.drone.mission.mission_progress():
+                    self.console.print(
+                        f"[white]Drone {drone.drone_id} progress: {progress.current}/{progress.total}[/white]"
+                    )
+                    if progress.current + 1 >= waypoint_count:
+                        self.console.print(
+                            f"[green]✅ Drone {drone.drone_id} mission complete[/green]"
+                        )
+                        break
+
+            await asyncio.gather(
+                *(monitor(drone, len(waypoints)) for drone, waypoints in assignments)
+            )
+
+            self.console.print("[blue]🛬 Landing drones...")
+            await asyncio.gather(*(drone.land() for drone, _ in assignments))
+            await asyncio.sleep(3)
+
+            self.console.print("[green]✅ Mission execution finished[/green]")
+            self._add_to_history("system", "Mission execution completed")
 
         except Exception as e:
             self.console.print(f"[red]❌ Mission execution failed: {e}[/red]")

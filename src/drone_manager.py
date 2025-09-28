@@ -605,6 +605,13 @@ class MultiDroneManager:
         """Get list of connected drones."""
         return [drone for drone in self.drones if drone.status.connected]
 
+    def get_drone(self, drone_id: str | int) -> Optional[DroneManager]:
+        """Return the drone manager matching the given ID."""
+        for drone in self.drones:
+            if str(drone.drone_id) == str(drone_id):
+                return drone
+        return None
+
     def get_armed_drones(self) -> List[DroneManager]:
         """Get list of armed drones."""
         return [drone for drone in self.drones if drone.status.armed]

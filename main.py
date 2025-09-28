@@ -31,6 +31,7 @@ class LLMDroneController:
 
     def __init__(self):
         self.config = Config()
+        self.config.create_directories()
         self.logger = self._setup_logging()
 
         # Core components
@@ -55,7 +56,7 @@ class LLMDroneController:
             handlers=[
                 logging.StreamHandler(sys.stdout),
                 logging.FileHandler(
-                    self.config.logging.log_file_path,
+                    self.config.logging.file_path,
                     mode='a'
                 )
             ]
@@ -134,9 +135,12 @@ class LLMDroneController:
     async def _connect_drones(self) -> int:
         """Connect to all configured drones"""
         try:
-            connected = await self.drone_manager.connect_all()
-            self.connected_drones = list(connected.keys())
-            return len(connected)
+            successful, _ = await self.drone_manager.connect_all()
+
+            connected_instances = self.drone_manager.get_connected_drones()
+            self.connected_drones = [str(drone.drone_id) for drone in connected_instances]
+
+            return successful
 
         except Exception as e:
             self.logger.error(f"Error connecting to drones: {e}")
@@ -280,9 +284,9 @@ class LLMDroneController:
             # Create mission context for search_rescue_enhanced world
             context = MissionContextBuilder.create_search_context(
                 scenario=scenario,
-                center_lat=47.397971,  # Search rescue world center
-                center_lon=8.546164,
-                radius_m=self.config.search.search_radius_m,
+                center_lat=self.config.search.center_lat,
+                center_lon=self.config.search.center_lon,
+                radius_m=self.config.search.radius_m,
                 num_drones=num_drones
             )
 
@@ -296,7 +300,7 @@ class LLMDroneController:
             self.logger.info(f"GPT-5 generated mission with {len(mission.drone_missions)} drone assignments")
 
             # Upload missions to drones
-            for i, (drone_id, waypoints) in enumerate(mission.drone_missions.items()):
+            for i, waypoints in enumerate(mission.drone_missions):
                 if i >= len(self.connected_drones):
                     break
 

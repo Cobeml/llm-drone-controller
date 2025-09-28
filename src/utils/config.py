@@ -65,11 +65,49 @@ class DroneConfig(BaseSettings):
     timeout_seconds: int = Field(default=30, env="DRONE_TIMEOUT_SECONDS")
     default_altitude: float = Field(default=20.0, env="PX4_DEFAULT_ALTITUDE")
     safety_radius: float = Field(default=100.0, env="PX4_SAFETY_RADIUS")
+    waypoint_radius_m: float = Field(default=2.0, env="DRONE_WAYPOINT_RADIUS_M")
+    max_flight_time_s: int = Field(default=900, env="DRONE_MAX_FLIGHT_TIME_S")
+    battery_warning_threshold: float = Field(default=30.0, env="DRONE_BATTERY_WARNING_THRESHOLD")
+    battery_critical_threshold: float = Field(default=15.0, env="DRONE_BATTERY_CRITICAL_THRESHOLD")
+    min_gps_satellites: int = Field(default=8, env="DRONE_MIN_GPS_SATELLITES")
 
     @validator("count")
     def validate_count(cls, v):
         if v < 1 or v > 10:
             raise ValueError("drone count must be between 1 and 10")
+        return v
+
+    @validator("waypoint_radius_m")
+    def validate_waypoint_radius(cls, v):
+        if v <= 0:
+            raise ValueError("waypoint radius must be positive")
+        return v
+
+    @validator("max_flight_time_s")
+    def validate_max_flight_time(cls, v):
+        if v <= 0:
+            raise ValueError("max flight time must be positive")
+        return v
+
+    @validator("battery_warning_threshold")
+    def validate_battery_warning(cls, v):
+        if v <= 0 or v > 100:
+            raise ValueError("battery warning threshold must be between 0 and 100")
+        return v
+
+    @validator("battery_critical_threshold")
+    def validate_battery_critical(cls, v, values):
+        if v <= 0 or v > 100:
+            raise ValueError("battery critical threshold must be between 0 and 100")
+        warning = values.get("battery_warning_threshold", 30.0)
+        if v >= warning:
+            raise ValueError("battery critical threshold must be less than warning threshold")
+        return v
+
+    @validator("min_gps_satellites")
+    def validate_min_gps(cls, v):
+        if v < 0:
+            raise ValueError("minimum GPS satellites cannot be negative")
         return v
 
     @property
@@ -89,6 +127,7 @@ class SearchConfig(BaseSettings):
     center_lat: float = Field(default=47.397971057728974, env="DEFAULT_SEARCH_CENTER_LAT")
     center_lon: float = Field(default=8.546163739800146, env="DEFAULT_SEARCH_CENTER_LON")
     radius_m: float = Field(default=200.0, env="DEFAULT_SEARCH_RADIUS_M")
+    max_altitude_m: float = Field(default=120.0, env="DEFAULT_SEARCH_MAX_ALTITUDE_M")
 
     @validator("center_lat")
     def validate_latitude(cls, v):
@@ -100,6 +139,12 @@ class SearchConfig(BaseSettings):
     def validate_longitude(cls, v):
         if v < -180 or v > 180:
             raise ValueError("longitude must be between -180 and 180")
+        return v
+
+    @validator("max_altitude_m")
+    def validate_max_altitude(cls, v):
+        if v <= 0:
+            raise ValueError("max altitude must be positive")
         return v
 
 
@@ -116,8 +161,32 @@ class TelemetryConfig(BaseSettings):
     """Telemetry configuration."""
 
     update_rate_hz: float = Field(default=1.0, env="TELEMETRY_UPDATE_RATE_HZ")
+    update_interval_s: Optional[float] = Field(default=None, env="TELEMETRY_UPDATE_INTERVAL_S")
+    alert_retention_hours: float = Field(default=2.0, env="TELEMETRY_ALERT_RETENTION_HOURS")
     log_enabled: bool = Field(default=True, env="TELEMETRY_LOG_ENABLED")
     log_path: str = Field(default="./logs", env="TELEMETRY_LOG_PATH")
+
+    @validator("update_rate_hz")
+    def validate_update_rate(cls, v):
+        if v <= 0:
+            raise ValueError("telemetry update rate must be positive")
+        return v
+
+    @validator("alert_retention_hours")
+    def validate_alert_retention(cls, v):
+        if v <= 0:
+            raise ValueError("alert retention must be positive")
+        return v
+
+    @validator("update_interval_s", always=True)
+    def set_update_interval(cls, v, values):
+        if v is not None:
+            if v <= 0:
+                raise ValueError("telemetry update interval must be positive")
+            return v
+
+        rate = values.get("update_rate_hz", 1.0)
+        return 1.0 / rate if rate > 0 else 1.0
 
 
 class MissionConfig(BaseSettings):

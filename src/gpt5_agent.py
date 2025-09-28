@@ -10,6 +10,7 @@ from datetime import datetime
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
+from geopy.distance import distance as geopy_distance
 
 from .utils.config import Config, get_config
 from .utils.validators import (
@@ -212,6 +213,7 @@ CRITICAL SAFETY PROTOCOLS:
 
 MISSION PLANNING REQUIREMENTS:
 - Generate systematic search patterns covering the suburban grid
+- Assign distinct waypoint lattices per drone; no pair of drones should share identical latitude/longitude coordinates within 5 meters.
 - Use altitude separation for multiple drones (minimum 5m vertical spacing)
 - Create waypoints that efficiently cover residential areas where people might be
 - Include takeoff/climb phase, search pattern, and safe landing procedures
@@ -304,7 +306,13 @@ Always respond with valid JSON matching the exact format requested."""
         """Convert raw waypoint data to validated Waypoint objects."""
         converted_missions = []
 
-        for mission in drone_missions:
+        search_center = validate_gps_coordinate(
+            self.config.search.center_lat,
+            self.config.search.center_lon
+        )
+        search_radius = self.config.search.radius_m
+
+        for mission_index, mission in enumerate(drone_missions, start=1):
             waypoints = []
             for wp_data in mission["waypoints"]:
                 try:
@@ -314,6 +322,25 @@ Always respond with valid JSON matching the exact format requested."""
                         wp_data["longitude"],
                         wp_data.get("altitude", 20.0)
                     )
+
+                    distance_to_center = search_center.distance_to(coordinate)
+                    if distance_to_center > search_radius:
+                        bearing = search_center.bearing_to(coordinate)
+                        dest = geopy_distance(meters=search_radius).destination(
+                            (search_center.latitude, search_center.longitude),
+                            bearing
+                        )
+                        coordinate = validate_gps_coordinate(
+                            dest.latitude,
+                            dest.longitude,
+                            coordinate.altitude
+                        )
+                        self.logger.info(
+                            "Clamped waypoint for drone %d to search boundary (bearing %.1f°, %.1fm)",
+                            mission_index,
+                            bearing,
+                            search_radius
+                        )
 
                     # Create waypoint
                     waypoint = Waypoint(

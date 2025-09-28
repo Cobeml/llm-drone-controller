@@ -120,6 +120,15 @@ class TelemetryMonitor:
         self.arm_time: Optional[datetime] = None
         self.takeoff_position: Optional[Position] = None
         self.last_position: Optional[Position] = None
+        self.last_battery: Optional[Battery] = None
+        self.last_velocity: Optional[VelocityNed] = None
+        self.last_attitude: Optional[EulerAngle] = None
+        self.last_health: Optional[Health] = None
+        self.last_gps_info: Optional[GpsInfo] = None
+        self.last_flight_mode: Optional[FlightMode] = None
+        self.last_rc_status: Optional[RcStatus] = None
+        self.last_landed_state: Optional[LandedState] = None
+        self.last_armed: bool = False
         self.last_health_check = datetime.now()
 
     async def start_monitoring(self) -> bool:
@@ -170,13 +179,15 @@ class TelemetryMonitor:
             gps_task = asyncio.create_task(self._monitor_gps())
             attitude_task = asyncio.create_task(self._monitor_attitude())
             velocity_task = asyncio.create_task(self._monitor_velocity())
+            landed_state_task = asyncio.create_task(self._monitor_landed_state())
 
             # Wait for cancellation
             await self._cancel_event.wait()
 
             # Cancel all tasks
             tasks = [position_task, battery_task, health_task, flight_mode_task,
-                    armed_task, gps_task, attitude_task, velocity_task]
+                    armed_task, gps_task, attitude_task, velocity_task,
+                    landed_state_task]
 
             for task in tasks:
                 task.cancel()
@@ -194,6 +205,8 @@ class TelemetryMonitor:
                     break
 
                 self.last_position = position
+                if self.arm_time and self.takeoff_position is None:
+                    self.takeoff_position = position
                 await self._update_metrics()
 
         except asyncio.CancelledError:
@@ -208,6 +221,7 @@ class TelemetryMonitor:
                 if self._cancel_event.is_set():
                     break
 
+                self.last_battery = battery
                 # Check battery alerts
                 await self._check_battery_health(battery)
                 await self._update_metrics()
@@ -224,6 +238,7 @@ class TelemetryMonitor:
                 if self._cancel_event.is_set():
                     break
 
+                self.last_health = health
                 await self._check_system_health(health)
                 await self._update_metrics()
 
@@ -239,6 +254,7 @@ class TelemetryMonitor:
                 if self._cancel_event.is_set():
                     break
 
+                self.last_flight_mode = flight_mode
                 self.logger.info(f"Flight mode changed to: {flight_mode}")
                 await self._update_metrics()
 
@@ -254,6 +270,7 @@ class TelemetryMonitor:
                 if self._cancel_event.is_set():
                     break
 
+                self.last_armed = is_armed
                 if is_armed and self.arm_time is None:
                     self.arm_time = datetime.now()
                     self.logger.info(f"Drone {self.drone_id} armed")
@@ -275,6 +292,7 @@ class TelemetryMonitor:
                 if self._cancel_event.is_set():
                     break
 
+                self.last_gps_info = gps_info
                 await self._check_gps_health(gps_info)
                 await self._update_metrics()
 
@@ -290,6 +308,7 @@ class TelemetryMonitor:
                 if self._cancel_event.is_set():
                     break
 
+                self.last_attitude = attitude
                 await self._update_metrics()
 
         except asyncio.CancelledError:
@@ -304,12 +323,28 @@ class TelemetryMonitor:
                 if self._cancel_event.is_set():
                     break
 
+                self.last_velocity = velocity
                 await self._update_metrics()
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
             self.logger.error(f"Velocity monitoring error: {e}")
+
+    async def _monitor_landed_state(self):
+        """Monitor landed state updates"""
+        try:
+            async for landed_state in self.drone.telemetry.landed_state():
+                if self._cancel_event.is_set():
+                    break
+
+                self.last_landed_state = landed_state
+                await self._update_metrics()
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            self.logger.error(f"Landed state monitoring error: {e}")
 
     async def _update_metrics(self):
         """Update comprehensive health metrics"""
@@ -318,21 +353,52 @@ class TelemetryMonitor:
             current_metrics = DroneHealthMetrics(
                 drone_id=self.drone_id,
                 timestamp=datetime.now(),
-                overall_status=HealthStatus.UNKNOWN
+                overall_status=HealthStatus.UNKNOWN,
+                position=self.last_position,
+                gps_info=self.last_gps_info,
+                attitude=self.last_attitude,
+                velocity=self.last_velocity,
+                battery=self.last_battery,
+                health=self.last_health,
+                flight_mode=self.last_flight_mode,
+                is_armed=self.last_armed,
+                landed_state=self.last_landed_state,
+                rc_status=self.last_rc_status
             )
 
-            # Get latest telemetry data (this is simplified - in reality we'd cache the latest values)
-            # For now, we'll use placeholder logic
+            # Battery metrics
+            if self.last_battery:
+                # MAVSDK provides remaining_percent in [0,1]
+                battery_pct = max(0.0, min(100.0, self.last_battery.remaining_percent * 100))
+                current_metrics.battery_percentage = battery_pct
+                current_metrics.battery_voltage_v = self.last_battery.voltage_v
+                # Estimate remaining time assuming linear usage across configured max flight time.
+                current_metrics.estimated_remaining_time_s = (
+                    self.config.drone.max_flight_time_s * (battery_pct / 100.0)
+                )
+
+            # GPS metrics
+            if self.last_gps_info:
+                current_metrics.gps_satellite_count = self.last_gps_info.num_satellites
 
             # Calculate derived metrics
             if self.last_position:
                 current_metrics.altitude_agl_m = self.last_position.relative_altitude_m
+                current_metrics.position = self.last_position
 
                 # Calculate distance to home if we have takeoff position
                 if self.takeoff_position:
                     current_metrics.distance_to_home_m = self._calculate_distance(
                         self.last_position, self.takeoff_position
                     )
+
+            if self.last_velocity:
+                current_metrics.velocity = self.last_velocity
+                current_metrics.speed_ms = (
+                    (self.last_velocity.north_m_s ** 2 +
+                     self.last_velocity.east_m_s ** 2 +
+                     self.last_velocity.down_m_s ** 2) ** 0.5
+                )
 
             # Calculate flight time
             if self.arm_time:
@@ -514,6 +580,63 @@ class TelemetryMonitor:
         except Exception as e:
             self.logger.error(f"Error resolving alert: {e}")
             return False
+
+    def get_latest_telemetry(self) -> Optional[Dict[str, Any]]:
+        """Compatibility helper returning telemetry as a dict."""
+        metrics = self.get_latest_metrics()
+        if not metrics:
+            return None
+
+        position_data: Dict[str, Any] = {}
+        if metrics.position:
+            position_data = {
+                "latitude": getattr(metrics.position, "latitude_deg", 0.0),
+                "longitude": getattr(metrics.position, "longitude_deg", 0.0),
+                "altitude": getattr(metrics.position, "relative_altitude_m", 0.0),
+                "absolute_altitude": getattr(metrics.position, "absolute_altitude_m", 0.0)
+            }
+
+        velocity_data: Dict[str, Any] = {}
+        if metrics.velocity:
+            velocity_data = {
+                "north": getattr(metrics.velocity, "north_m_s", 0.0),
+                "east": getattr(metrics.velocity, "east_m_s", 0.0),
+                "down": getattr(metrics.velocity, "down_m_s", 0.0)
+            }
+
+        battery_data: Dict[str, Any] = {
+            "percentage": metrics.battery_percentage,
+            "voltage": metrics.battery_voltage_v
+        }
+
+        in_air = False
+        if metrics.landed_state is not None:
+            if metrics.landed_state == LandedState.IN_AIR:
+                in_air = True
+            elif metrics.landed_state == LandedState.ON_GROUND:
+                in_air = False
+            else:
+                in_air = metrics.altitude_agl_m > 0.5
+        else:
+            in_air = metrics.altitude_agl_m > 0.5
+
+        telemetry = {
+            "drone_id": metrics.drone_id,
+            "timestamp": metrics.timestamp,
+            "armed": metrics.is_armed,
+            "in_air": in_air,
+            "position": position_data,
+            "altitude": metrics.altitude_agl_m,
+            "battery": battery_data,
+            "velocity": velocity_data,
+            "flight_mode": str(metrics.flight_mode) if metrics.flight_mode else "UNKNOWN",
+            "overall_status": metrics.overall_status.value,
+            "gps_satellites": metrics.gps_satellite_count,
+            "speed_ms": metrics.speed_ms,
+            "flight_time_s": metrics.flight_time_s
+        }
+
+        return telemetry
 
 
 class MultiDroneTelemetryAggregator:
