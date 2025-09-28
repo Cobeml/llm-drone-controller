@@ -20,6 +20,30 @@ class OpenAIConfig(BaseSettings):
     temperature: float = Field(default=0.7, env="OPENAI_TEMPERATURE")
     enable_thinking: bool = Field(default=True, env="OPENAI_ENABLE_THINKING")
 
+    def __init__(self, **data):
+        """Initialize with environment loading."""
+        # Load .env files BEFORE calling super().__init__()
+        env_files = [".env.local", ".env"]
+        for env_file in env_files:
+            env_path = Path(env_file)
+            if not env_path.exists():
+                # Try parent directories
+                for parent in Path.cwd().parents:
+                    env_path = parent / env_file
+                    if env_path.exists():
+                        break
+            if env_path.exists():
+                load_dotenv(env_path)
+                break
+        super().__init__(**data)
+
+    class Config:
+        """Pydantic configuration."""
+        env_file = [".env.local", ".env"]
+        env_file_encoding = "utf-8"
+        case_sensitive = False
+        extra = "ignore"
+
     @validator("verbosity")
     def validate_verbosity(cls, v):
         if v not in ["low", "medium", "high"]:
@@ -37,7 +61,7 @@ class DroneConfig(BaseSettings):
     """Drone configuration."""
 
     count: int = Field(default=3, env="DRONE_COUNT")
-    base_port: int = Field(default=14540, env="DRONE_BASE_PORT")
+    base_port: int = Field(default=14541, env="DRONE_BASE_PORT")
     timeout_seconds: int = Field(default=30, env="DRONE_TIMEOUT_SECONDS")
     default_altitude: float = Field(default=20.0, env="PX4_DEFAULT_ALTITUDE")
     safety_radius: float = Field(default=100.0, env="PX4_SAFETY_RADIUS")
@@ -56,7 +80,7 @@ class DroneConfig(BaseSettings):
     @property
     def connection_strings(self) -> List[str]:
         """Get connection strings for all drones."""
-        return [f"udp://:{port}" for port in self.ports]
+        return [f"udpin://0.0.0.0:{port}" for port in self.ports]
 
 
 class SearchConfig(BaseSettings):
@@ -144,43 +168,129 @@ class DevelopmentConfig(BaseSettings):
 class Config(BaseSettings):
     """Main configuration class."""
 
-    # Sub-configurations
-    openai: OpenAIConfig = OpenAIConfig()
-    drone: DroneConfig = DroneConfig()
-    search: SearchConfig = SearchConfig()
-    web: WebConfig = WebConfig()
-    telemetry: TelemetryConfig = TelemetryConfig()
-    mission: MissionConfig = MissionConfig()
-    safety: SafetyConfig = SafetyConfig()
-    logging: LoggingConfig = LoggingConfig()
-    development: DevelopmentConfig = DevelopmentConfig()
-
     # Global settings
     simulation_world: str = Field(default="search_rescue_enhanced", env="SIMULATION_WORLD")
     px4_sitl_path: str = Field(default="/home/cobe-liu/Developing/PX4-Autopilot", env="PX4_SITL_PATH")
 
     class Config:
         """Pydantic configuration."""
-        env_file = ".env"
+        env_file = [".env.local", ".env"]  # Try .env.local first, then .env
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"  # Ignore extra environment variables
 
     def __init__(self, **data):
         """Initialize configuration with environment loading."""
-        # Load .env file from current directory or project root
-        env_path = Path(".env")
-        if not env_path.exists():
-            # Try parent directories
-            for parent in Path.cwd().parents:
-                env_path = parent / ".env"
-                if env_path.exists():
-                    break
+        # Load .env files from current directory or project root
+        # Try .env.local first, then .env
+        env_files_to_try = [".env.local", ".env"]
 
-        if env_path.exists():
-            load_dotenv(env_path)
+        for env_file in env_files_to_try:
+            env_path = Path(env_file)
+            if not env_path.exists():
+                # Try parent directories
+                for parent in Path.cwd().parents:
+                    env_path = parent / env_file
+                    if env_path.exists():
+                        break
 
-        # Initialize sub-configs
+            if env_path.exists():
+                load_dotenv(env_path)
+                break  # Use the first env file found
+
+        # Initialize parent class first
         super().__init__(**data)
+
+        # Cache sub-configs to avoid re-instantiation
+        self._openai_config = None
+        self._drone_config = None
+        self._search_config = None
+        self._web_config = None
+        self._telemetry_config = None
+        self._mission_config = None
+        self._safety_config = None
+        self._logging_config = None
+        self._development_config = None
+
+    @property
+    def openai(self) -> OpenAIConfig:
+        """Get OpenAI configuration."""
+        if self._openai_config is None:
+            # Pass environment variables explicitly
+            import os
+            self._openai_config = OpenAIConfig(
+                api_key=os.getenv("OPENAI_API_KEY", "test_key"),
+                model=os.getenv("OPENAI_MODEL", "gpt-5"),
+                model_variant=os.getenv("OPENAI_MODEL_VARIANT", "gpt-5-mini"),
+                verbosity=os.getenv("OPENAI_VERBOSITY", "medium"),
+                reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "medium"),
+                max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "8192")),
+                temperature=float(os.getenv("OPENAI_TEMPERATURE", "0.7")),
+                enable_thinking=os.getenv("OPENAI_ENABLE_THINKING", "true").lower() == "true"
+            )
+        return self._openai_config
+
+    @property
+    def drone(self) -> DroneConfig:
+        """Get drone configuration."""
+        if self._drone_config is None:
+            self._drone_config = DroneConfig()
+        return self._drone_config
+
+    @property
+    def search(self) -> SearchConfig:
+        """Get search configuration."""
+        if self._search_config is None:
+            self._search_config = SearchConfig()
+        return self._search_config
+
+    @property
+    def web(self) -> WebConfig:
+        """Get web configuration."""
+        if self._web_config is None:
+            self._web_config = WebConfig()
+        return self._web_config
+
+    @property
+    def telemetry(self) -> TelemetryConfig:
+        """Get telemetry configuration."""
+        if self._telemetry_config is None:
+            self._telemetry_config = TelemetryConfig()
+        return self._telemetry_config
+
+    @property
+    def mission(self) -> MissionConfig:
+        """Get mission configuration."""
+        if self._mission_config is None:
+            # Pass environment variables explicitly
+            import os
+            self._mission_config = MissionConfig(
+                planning_timeout=int(os.getenv("MISSION_PLANNING_TIMEOUT", "30")),
+                execution_timeout=int(os.getenv("MISSION_EXECUTION_TIMEOUT", "300")),
+                waypoint_tolerance_m=float(os.getenv("WAYPOINT_TOLERANCE_M", "2.0"))
+            )
+        return self._mission_config
+
+    @property
+    def safety(self) -> SafetyConfig:
+        """Get safety configuration."""
+        if self._safety_config is None:
+            self._safety_config = SafetyConfig()
+        return self._safety_config
+
+    @property
+    def logging(self) -> LoggingConfig:
+        """Get logging configuration."""
+        if self._logging_config is None:
+            self._logging_config = LoggingConfig()
+        return self._logging_config
+
+    @property
+    def development(self) -> DevelopmentConfig:
+        """Get development configuration."""
+        if self._development_config is None:
+            self._development_config = DevelopmentConfig()
+        return self._development_config
 
     def validate_all(self) -> bool:
         """Validate all configuration sections."""

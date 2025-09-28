@@ -193,10 +193,36 @@ IMPORTANT:
         """Call GPT-5 API with advanced parameters."""
         try:
             # GPT-5 specific parameters for September 2025
+            # Enhanced system prompt with world-aware context for search_rescue_enhanced
+            system_prompt = """You are an expert autonomous drone mission planner specializing in search and rescue operations in suburban environments.
+
+MISSION CONTEXT - Search & Rescue Enhanced World:
+- Location: Zurich area (47.397971°N, 8.546164°E)
+- Environment: Suburban residential area with houses in grid pattern
+- Building Heights: 6-8m residential structures (houses, garages)
+- Terrain Features: Trees, central plaza, operations center building
+- Search Area: ~200m radius from center coordinates
+- Target: Missing persons (unknown locations - must search systematically)
+
+CRITICAL SAFETY PROTOCOLS:
+1. VERTICAL FIRST: Always ascend to 20m+ altitude BEFORE lateral movement
+2. Building Clearance: Maintain minimum 15m altitude over residential areas
+3. Multi-drone Coordination: Use different altitude bands (20m, 25m, 30m) to avoid collisions
+4. No Obstacle Avoidance: System has no automated obstacle detection - rely on altitude for safety
+
+MISSION PLANNING REQUIREMENTS:
+- Generate systematic search patterns covering the suburban grid
+- Use altitude separation for multiple drones (minimum 5m vertical spacing)
+- Create waypoints that efficiently cover residential areas where people might be
+- Include takeoff/climb phase, search pattern, and safe landing procedures
+- Plan for 15-20 minute missions with battery reserves
+
+Always respond with valid JSON matching the exact format requested."""
+
             messages = [
                 {
                     "role": "system",
-                    "content": "You are an expert autonomous drone mission planner with extensive experience in search and rescue operations. Always respond with valid JSON that exactly matches the requested format."
+                    "content": system_prompt
                 },
                 {
                     "role": "user",
@@ -208,11 +234,12 @@ IMPORTANT:
             kwargs = {
                 "model": self.model,
                 "messages": messages,
-                "max_tokens": self.config.openai.max_tokens,
-                "temperature": self.config.openai.temperature,
+                "max_completion_tokens": self.config.openai.max_tokens,  # GPT-5 uses max_completion_tokens
                 "response_format": {"type": "json_object"},
                 "timeout": self.config.mission.planning_timeout
             }
+
+            # GPT-5 only supports temperature=1 (default), so don't include temperature parameter
 
             # Add GPT-5 specific parameters
             if hasattr(self.config.openai, 'verbosity'):
@@ -221,10 +248,9 @@ IMPORTANT:
             if hasattr(self.config.openai, 'reasoning_effort'):
                 kwargs["reasoning_effort"] = self.reasoning_effort
 
-            if self.enable_thinking:
-                kwargs["thinking"] = True
+            # Note: 'thinking' parameter removed - not yet available in current OpenAI API
 
-            self.logger.debug(f"Calling GPT-5 with model: {self.model}, verbosity: {self.verbosity}")
+            self.logger.debug(f"Calling GPT-5 with model: {self.model}, reasoning_effort: {self.reasoning_effort}")
 
             response = await self.client.chat.completions.create(**kwargs)
 

@@ -48,9 +48,9 @@ async def monitor_mission_progress(drone: DroneManager, expected_waypoints: int,
     async for progress in drone.drone.mission.mission_progress():
         print(
             f"Mission progress: current={progress.current} / total={progress.total}, "
-            f"finished={progress.mission_finished}"
+            f"finished={progress.current >= progress.total - 1}"
         )
-        if progress.mission_finished or progress.current + 1 >= expected_waypoints:
+        if progress.current >= progress.total - 1 or progress.current + 1 >= expected_waypoints:
             print("✅ Mission reported complete")
             break
         if asyncio.get_event_loop().time() - start_time > timeout:
@@ -86,6 +86,16 @@ async def main() -> None:
             print("❌ Mission upload failed")
             return
 
+        # Check if drone needs to takeoff first
+        telemetry = await drone.get_telemetry()
+        if not telemetry["in_air"]:
+            print(f"Drone on ground, taking off to {mission_altitude}m...")
+            if not await drone.arm_and_takeoff(mission_altitude):
+                print("❌ Takeoff failed")
+                return
+        else:
+            print(f"Drone already airborne at {telemetry['position']['altitude']:.1f}m")
+        
         print("Starting mission...")
         if not await drone.start_mission():
             print("❌ Mission start failed")

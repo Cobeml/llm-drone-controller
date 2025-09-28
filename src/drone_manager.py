@@ -313,17 +313,24 @@ class DroneManager:
             for i, wp in enumerate(waypoints):
                 wp_dict = wp.to_mavsdk_dict()
 
+                # Set is_fly_through=False if we have loiter time to avoid conflicts
+                is_fly_through = wp_dict["loiter_time"] <= 0
+                
                 mission_item = MissionItem(
                     wp_dict["lat"],
                     wp_dict["lon"],
                     wp_dict["alt"],
                     wp_dict["speed"],
-                    is_fly_through=True,
+                    is_fly_through=is_fly_through,
                     gimbal_pitch_deg=wp_dict["gimbal_pitch"],
                     gimbal_yaw_deg=wp_dict["gimbal_yaw"],
                     camera_action=MissionItem.CameraAction.NONE,
                     loiter_time_s=wp_dict["loiter_time"],
-                    camera_photo_interval_s=wp_dict["photo_interval"]
+                    camera_photo_interval_s=wp_dict["photo_interval"],
+                    acceptance_radius_m=2.0,
+                    yaw_deg=float('nan'),
+                    camera_photo_distance_m=0.0,
+                    vehicle_action=MissionItem.VehicleAction.NONE
                 )
                 mission_items.append(mission_item)
 
@@ -350,6 +357,18 @@ class DroneManager:
             if not self._mission_items:
                 self.logger.error(f"Drone {self.drone_id}: No mission uploaded")
                 return False
+
+            # Check drone state and ensure it's ready for mission
+            telemetry = await self.get_telemetry()
+            if not telemetry["connected"]:
+                self.logger.error(f"Drone {self.drone_id}: Not connected")
+                return False
+
+            # If drone is on ground and not armed, arm it first
+            if not telemetry["in_air"] and not telemetry["armed"]:
+                self.logger.info(f"Drone {self.drone_id}: Arming before mission start")
+                await self.drone.action.arm()
+                await asyncio.sleep(2)  # Give time for arming
 
             self.logger.info(f"Drone {self.drone_id}: Starting mission")
             await self.drone.mission.start_mission()
