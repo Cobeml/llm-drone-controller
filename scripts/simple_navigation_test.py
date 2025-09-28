@@ -53,7 +53,8 @@ async def main() -> None:
         target = validate_gps_coordinate(
             config.search.center_lat + offset,
             config.search.center_lon + offset,
-            start_telemetry["position"]["altitude"] or config.drone.default_altitude,
+            (drone.status.position.altitude if drone.status.position else None)
+            or config.drone.default_altitude,
         )
 
         print(
@@ -76,6 +77,15 @@ async def main() -> None:
                 alt=current["position"]["altitude"],
             )
         )
+        if drone.status.position:
+            origin = validate_gps_coordinate(
+                config.search.center_lat,
+                config.search.center_lon,
+                drone.status.position.altitude,
+            )
+            distance = origin.distance_to(drone.status.position)
+            print(f"  Distance from launch center: {distance:.2f} m")
+            print(f"  Raw target altitude command: {target.altitude:.1f} m")
 
         print("Commanding landing...")
         await drone.land()

@@ -374,14 +374,29 @@ class DroneManager:
             return False
 
     async def goto_location(self, coordinate: GPSCoordinate, speed: float = 5.0) -> bool:
-        """Go to specific GPS coordinates."""
+        """Go to specific GPS coordinates using absolute altitude."""
         try:
             self.logger.info(f"Drone {self.drone_id}: Going to {coordinate.latitude}, {coordinate.longitude}")
+
+            # MAVSDK expects an absolute altitude (MSL). If callers provide what
+            # looks like a relative altitude, convert it using the current home
+            # altitude derived from telemetry so we do not drive the vehicle into
+            # the ground.
+            current_abs_alt = self.status.position.altitude if self.status.position else None
+            current_rel_alt = self.status.altitude
+
+            target_altitude = coordinate.altitude
+            if target_altitude is None:
+                target_altitude = current_abs_alt or self.config.drone.default_altitude
+            elif current_abs_alt is not None and current_rel_alt is not None:
+                home_altitude = current_abs_alt - current_rel_alt
+                if abs(target_altitude - current_rel_alt) < 50.0:
+                    target_altitude = home_altitude + target_altitude
 
             await self.drone.action.goto_location(
                 coordinate.latitude,
                 coordinate.longitude,
-                coordinate.altitude or self.status.altitude,
+                target_altitude,
                 speed
             )
             return True

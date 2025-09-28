@@ -1,0 +1,26 @@
+# Build once (only needed the first time):
+
+  make px4_sitl
+
+# Terminal 1 – quadcopter host (runs gzserver on GPU)
+
+  __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia 
+  __VK_LAYER_NV_optimus=NVIDIA_only 
+  PX4_SYS_AUTOSTART=4001 PX4_SIM_MODEL=gz_x500 
+  ./build/px4_sitl_default/bin/px4 -i 1
+
+# Terminal 2 – second quad (joins existing Gazebo, still okay to keep GPU vars)
+
+  __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia 
+  __VK_LAYER_NV_optimus=NVIDIA_only 
+  PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 
+  PX4_GZ_MODEL_POSE="0 8 0 0 0 0" PX4_SIM_MODEL=gz_x500 
+  ./build/px4_sitl_default/bin/px4 -i 2
+
+# Terminal 3 – VTOL instance
+
+  __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia
+  __VK_LAYER_NV_optimus=NVIDIA_only
+  PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=10016
+  PX4_GZ_MODEL_POSE="-8 0 0 0 0 0" PX4_SIM_MODEL=gz_standard_vtol
+  ./build/px4_sitl_default/bin/px4 -i 3

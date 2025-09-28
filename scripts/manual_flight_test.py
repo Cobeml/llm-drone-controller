@@ -50,10 +50,12 @@ async def print_telemetry(drone: DroneManager, label: str) -> None:
 async def fly_to_coordinate(drone: DroneManager, lat_offset: float, lon_offset: float, altitude: Optional[float] = None) -> bool:
     """Command the drone to fly to a coordinate offset from the configured search center."""
     config = drone.config
+    current_abs_alt = (drone.status.position.altitude if drone.status.position else None)
+    target_altitude = altitude or current_abs_alt or config.drone.default_altitude
     target_coordinate = validate_gps_coordinate(
         config.search.center_lat + lat_offset,
         config.search.center_lon + lon_offset,
-        altitude or config.drone.default_altitude,
+        target_altitude,
     )
 
     print(
@@ -105,6 +107,15 @@ async def main() -> None:
         print("Hold position for observation...")
         await asyncio.sleep(15)
         await print_telemetry(drone, label="On-target")
+
+        if drone.status.position:
+            origin = validate_gps_coordinate(
+                config.search.center_lat,
+                config.search.center_lon,
+                drone.status.position.altitude,
+            )
+            distance = origin.distance_to(drone.status.position)
+            print(f"  Distance from launch center: {distance:.2f} m")
 
         print("Initiating landing sequence...")
         await drone.land()
