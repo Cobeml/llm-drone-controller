@@ -230,29 +230,32 @@ Always respond with valid JSON matching the exact format requested."""
                 }
             ]
 
-            # Advanced GPT-5 parameters
+            # Model-specific parameters: stick to the currently supported OpenAI Chat Completions API surface.
             kwargs = {
                 "model": self.model,
                 "messages": messages,
-                "max_completion_tokens": self.config.openai.max_tokens,  # GPT-5 uses max_completion_tokens
                 "response_format": {"type": "json_object"},
                 "timeout": self.config.mission.planning_timeout
             }
 
-            # GPT-5 only supports temperature=1 (default), so don't include temperature parameter
+            if "gpt-5" in self.model.lower():
+                kwargs["max_completion_tokens"] = self.config.openai.max_tokens
+            else:
+                kwargs["max_tokens"] = self.config.openai.max_tokens
+                kwargs["temperature"] = self.config.openai.temperature
 
-            # Add GPT-5 specific parameters
-            if hasattr(self.config.openai, 'verbosity'):
-                kwargs["verbosity"] = self.verbosity
+            self.logger.debug(
+                "Calling OpenAI chat.completions with model %s (reasoning_effort=%s)",
+                self.model,
+                self.reasoning_effort,
+            )
 
-            if hasattr(self.config.openai, 'reasoning_effort'):
-                kwargs["reasoning_effort"] = self.reasoning_effort
-
-            # Note: 'thinking' parameter removed - not yet available in current OpenAI API
-
-            self.logger.debug(f"Calling GPT-5 with model: {self.model}, reasoning_effort: {self.reasoning_effort}")
-
-            response = await self.client.chat.completions.create(**kwargs)
+            try:
+                response = await self.client.chat.completions.create(**kwargs)
+            except TypeError as e:
+                raise
+            except Exception as api_exc:
+                raise
 
             return response
 

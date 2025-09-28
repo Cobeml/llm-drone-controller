@@ -14,12 +14,16 @@ import sys
 from typing import Dict, List, Optional
 from datetime import datetime
 
+import click
+from rich.console import Console
+
 from src.utils.config import Config
 from src.drone_manager import MultiDroneManager, DroneManager
 from src.gpt5_agent import GPT5MissionPlanner, MissionContextBuilder
 from src.mission_executor import MissionExecutor, MultiMissionCoordinator
 from src.telemetry_monitor import TelemetryMonitor, MultiDroneTelemetryAggregator
 from src.utils.validators import Waypoint, GPSCoordinate
+from src.chat_cli import start_chat_interface
 
 
 class LLMDroneController:
@@ -457,13 +461,66 @@ async def test_basic_connection():
         return False
 
 
-if __name__ == "__main__":
-    # Check if running in test mode
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        print("Running basic connection test...")
-        result = asyncio.run(test_basic_connection())
-        sys.exit(0 if result else 1)
+@click.group()
+@click.option('--debug', is_flag=True, help='Enable debug logging')
+def cli(debug):
+    """LLM Drone Controller - GPT-5 powered autonomous drone missions."""
+    if debug:
+        logging.basicConfig(level=logging.DEBUG)
 
-    # Normal operation
+
+@cli.command()
+def test():
+    """Run basic connection test."""
+    console = Console()
+    console.print("[blue]🔧 Running basic connection test...[/blue]")
+    result = asyncio.run(test_basic_connection())
+    if result:
+        console.print("[green]✅ Connection test passed[/green]")
+    else:
+        console.print("[red]❌ Connection test failed[/red]")
+    sys.exit(0 if result else 1)
+
+
+@cli.command()
+def run():
+    """Run the main drone controller application."""
     controller = LLMDroneController()
     controller.run()
+
+
+@cli.command()
+def chat():
+    """Start interactive chat interface for drone control."""
+    async def chat_main():
+        console = Console()
+        console.print("[blue]🚁 Initializing LLM Drone Controller...[/blue]")
+
+        try:
+            controller = LLMDroneController()
+
+            # Initialize controller
+            if not await controller.initialize():
+                console.print("[red]❌ Failed to initialize controller[/red]")
+                return 1
+
+            # Start chat interface
+            await start_chat_interface(controller)
+
+            # Cleanup
+            await controller.shutdown()
+            return 0
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interrupted by user[/yellow]")
+            return 0
+        except Exception as e:
+            console.print(f"[red]❌ Fatal error: {e}[/red]")
+            return 1
+
+    result = asyncio.run(chat_main())
+    sys.exit(result)
+
+
+if __name__ == "__main__":
+    cli()
