@@ -3,14 +3,15 @@
 import os
 from pathlib import Path
 from typing import Optional, List
-from pydantic import BaseSettings, Field, validator
+from pydantic import BaseModel, Field, validator
+from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
 
 class OpenAIConfig(BaseSettings):
     """OpenAI GPT-5 configuration."""
 
-    api_key: str = Field(..., env="OPENAI_API_KEY")
+    api_key: str = Field(default="test_key", env="OPENAI_API_KEY")
     model: str = Field(default="gpt-5", env="OPENAI_MODEL")
     model_variant: str = Field(default="gpt-5-mini", env="OPENAI_MODEL_VARIANT")
     verbosity: str = Field(default="medium", env="OPENAI_VERBOSITY")
